@@ -369,6 +369,10 @@ class GlobalAsmBlock:
         self.fn_ins_inds = []
         self.num_lines = 0
 
+    def align4(self, section):
+        while self.fn_section_sizes[section] % 4 != 0:
+            self.fn_section_sizes[section] += 1
+
     def add_sized(self, size, line):
         if self.cur_section in ['.text', '.late_rodata']:
             assert size % 4 == 0, "size must be a multiple of 4 on line: " + line
@@ -403,13 +407,24 @@ class GlobalAsmBlock:
         elif line.startswith('.incbin'):
             self.add_sized(int(line.split(',')[-1].strip(), 0), line)
         elif line.startswith('.word') or line.startswith('.float'):
+            self.align4(self.current_section)
             self.add_sized(4 * len(line.split(',')), line)
         elif line.startswith('.double'):
+            self.align4(self.current_section)
             self.add_sized(8 * len(line.split(',')), line)
         elif line.startswith('.space'):
             self.add_sized(int(line.split()[1], 0), line)
+        elif line.startswith('.balign'):
+            align = int(line.split()[1])
+            assert align == 4, "only .balign 4 is supported"
+            self.align4(self.current_section)
+        elif line.startswith('.asci'):
+            size = len(line.split('"')[1])
+            if line.startswith('.asciz') or line.startswith('.asciiz'):
+                size += 1
+            self.add_sized(size, line)
         elif line.startswith('.'):
-            # .macro, .ascii, .asciiz, .balign, .align, ...
+            # .macro, .align, ...
             assert False, 'not supported yet: ' + line
         else:
             # Unfortunately, macros are hard to support for .rodata --
@@ -433,6 +448,9 @@ class GlobalAsmBlock:
         src = [''] * (self.num_lines + 1)
         late_rodata = []
         late_rodata_fn_output = []
+        self.align4('.rodata')
+        self.align4('.data')
+        self.align4('.bss')
 
         if self.fn_section_sizes['.late_rodata'] > 0:
             # Generate late rodata by emitting unique float constants.
