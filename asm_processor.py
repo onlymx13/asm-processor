@@ -634,8 +634,8 @@ class GlobalAsmBlock:
         text_name = None
         if self.fn_section_sizes['.text'] > 0 or late_rodata_fn_output:
             text_name = state.make_name('func')
-            src[0] = 'void {}(void) {{'.format(text_name)
-            src[self.num_lines] = '}'
+            src[0] = 'int {}(void) {{ return '.format(text_name)
+            src[self.num_lines] = '((volatile void *) 0); }; '
             instr_count = self.fn_section_sizes['.text'] // 4
             if instr_count < state.min_instr_count:
                 self.fail("too short .text block")
@@ -653,14 +653,14 @@ class GlobalAsmBlock:
                         # compiler decides it is a great idea to start optimizing more.
                         fn_emitted = 0
                         fn_skipped = 0
-                        src[line] += ' }} void {}(void) {{ '.format(state.make_name('large_func'))
+                        src[line] += '((volatile void *) 0); }} int {}(void) {{ return '.format(state.make_name('large_func'))
                     if fn_skipped < state.skip_instr_count:
                         fn_skipped += 1
                         tot_skipped += 1
                     elif rodata_stack:
                         src[line] += rodata_stack.pop()
                     else:
-                        src[line] += '*(volatile int*)0 = 0;'
+                        src[line] += '*(int *)'
                     tot_emitted += 1
                     fn_emitted += 1
             if rodata_stack:
@@ -709,29 +709,9 @@ def repl_float_hex(m):
     return str(struct.unpack(">I", struct.pack(">f", float(m.group(0).strip().rstrip("f"))))[0])
 
 def parse_source(f, opt, framepointer, input_enc, output_enc, print_source=None):
-    if opt in ['O2', 'O1']:
-        if framepointer:
-            min_instr_count = 6
-            skip_instr_count = 5
-        else:
-            min_instr_count = 2
-            skip_instr_count = 1
-    elif opt == 'g':
-        if framepointer:
-            min_instr_count = 7
-            skip_instr_count = 7
-        else:
-            min_instr_count = 4
-            skip_instr_count = 4
-    else:
-        if opt != 'g3':
-            raise Failure("must pass one of -g, -O1, -O2, -O2 -g3")
-        if framepointer:
-            min_instr_count = 4
-            skip_instr_count = 4
-        else:
-            min_instr_count = 2
-            skip_instr_count = 2
+    opt = "O4"
+    min_instr_count = 2 # idk
+    skip_instr_count = 1 # idk
 
     use_jtbl_for_rodata = False
     if opt in ['O2', 'g3'] and not framepointer:
@@ -1105,7 +1085,7 @@ def run_wrapped(argv, outfile):
     parser.add_argument('--output-enc', default='latin1', help="Output encoding (default: latin1)")
     parser.add_argument('-framepointer', dest='framepointer', action='store_true')
     parser.add_argument('-g3', dest='g3', action='store_true')
-    group = parser.add_mutually_exclusive_group(required=True)
+    group = parser.add_mutually_exclusive_group(required=False)
     group.add_argument('-O1', dest='opt', action='store_const', const='O1')
     group.add_argument('-O2', dest='opt', action='store_const', const='O2')
     group.add_argument('-g', dest='opt', action='store_const', const='g')

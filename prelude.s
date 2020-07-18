@@ -1,3 +1,4 @@
+/*
 .set noat
 .set noreorder
 .set gp=64
@@ -5,4 +6,4 @@
     .global \label
     \label:
 .endm
-
+*/
