@@ -108,7 +108,7 @@ class ElfHeader:
         assert self.e_ident[EI_CLASS] == 1 # 32-bit
         assert self.e_ident[EI_DATA] == 2 # big-endian
         assert self.e_type == 1 # relocatable
-        assert self.e_machine == 8 # MIPS I Architecture
+        #assert self.e_machine == 8 # MIPS I Architecture
         assert self.e_phoff == 0 # no program header
         assert self.e_shoff != 0 # section header
         assert self.e_shstrndx != SHN_UNDEF

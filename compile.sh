@@ -11,12 +11,10 @@ else
 fi
 
 CC="$WINE $CODEWARRIOR/mwcceppc.exe"
-CFLAGS="-Cpp_exceptions off -proc gekko -fp hard -O4"
-AS="powerpc-eabi-as"
+CCFLAGS="-Cpp_exceptions off -proc gekko -fp hard -O4"
+AS="$WINE $DEVKITPPC/bin/powerpc-eabi-as.exe"
 ASFLAGS="-mgekko" # -I include
-set +e
-OPTFLAGS=""
-set -e
 
-python3 asm_processor.py "$OPTFLAGS" "$INPUT" | $CC -c $CFLAGS include-stdin.c -o "$OUTPUT" "$OPTFLAGS"
-python3 asm_processor.py "$OPTFLAGS" "$INPUT" --post-process "$OUTPUT" --assembler "$AS $ASFLAGS" --asm-prelude prelude.s
+python3 asm_processor.py "$INPUT" | $CC -c $CCFLAGS include-stdin.c -o "$OUTPUT" "$OPTFLAGS"
+echo python3 asm_processor.py "$INPUT" --post-process "$OUTPUT" --assembler "$AS $ASFLAGS" --asm-prelude prelude.s
+python3 asm_processor.py "$INPUT" --post-process "$OUTPUT" --assembler "$AS $ASFLAGS" --asm-prelude prelude.s
