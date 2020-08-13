@@ -521,7 +521,7 @@ class GlobalAsmBlock:
             changed_section = True
         elif line.startswith('.incbin'):
             self.add_sized(int(line.split(',')[-1].strip(), 0), real_line)
-        elif line.startswith('.word') or line.startswith('.float'):
+        elif line.startswith('.long') or line.startswith('.float'):
             self.align4()
             self.add_sized(4 * len(line.split(',')), real_line)
         elif line.startswith('.double'):
@@ -870,11 +870,11 @@ def fixup_objfile(objfile_name, functions, asm_prelude, assembler, output_enc):
             asm.extend(conts)
         asm.append('glabel {}'.format(late_rodata_source_name_end))
 
-    o_file = tempfile.NamedTemporaryFile(prefix='asm-processor', suffix='.o', delete=False)
-    o_name = o_file.name
-    o_file.close()
-    s_file = tempfile.NamedTemporaryFile(prefix='asm-processor', suffix='.s', delete=False)
-    s_name = s_file.name
+    o_file = open("asm_processor_temp.o", 'w').close() # Create temp file. tempfile module isn't working for me.
+    o_name = "asm_processor_temp.o"
+
+    s_file = open("asm_processor_temp.s", 'wb') # Ditto.
+    s_name = "asm_processor_temp.s"
     try:
         s_file.write(asm_prelude + b'\n')
         for line in asm:
@@ -889,6 +889,7 @@ def fixup_objfile(objfile_name, functions, asm_prelude, assembler, output_enc):
         # Remove some clutter from objdump output
         objfile.drop_irrelevant_sections()
 
+        """
         # Unify reginfo sections
         target_reginfo = objfile.find_section('.reginfo')
         source_reginfo_data = list(asm_objfile.find_section('.reginfo').data)
@@ -896,6 +897,7 @@ def fixup_objfile(objfile_name, functions, asm_prelude, assembler, output_enc):
         for i in range(20):
             data[i] |= source_reginfo_data[i]
         target_reginfo.data = bytes(data)
+        """
 
         # Move over section contents
         modified_text_positions = set()
