@@ -408,9 +408,14 @@ class GlobalAsmBlock:
         self.text_glabels = []
         self.fn_section_sizes = {
             '.text': 0,
+            '.init': 0,
             '.data': 0,
             '.bss': 0,
             '.rodata': 0,
+            '.sdata': 0,
+            '.sdata2': 0,
+            '.sbss': 0,
+            #'.sbss2': 0,
             '.late_rodata': 0,
         }
         self.fn_ins_inds = []
@@ -472,15 +477,15 @@ class GlobalAsmBlock:
             self.fn_section_sizes[self.cur_section] += 1
 
     def add_sized(self, size, line):
-        if self.cur_section in ['.text', '.late_rodata']:
+        if self.cur_section in ['.text', '.init', '.late_rodata']:
             if size % 4 != 0:
                 self.fail("size must be a multiple of 4", line)
         if size < 0:
             self.fail("size cannot be negative", line)
         self.fn_section_sizes[self.cur_section] += size
-        if self.cur_section == '.text':
+        if self.cur_section in ['.text', '.init']:
             if not self.text_glabels:
-                self.fail(".text block without an initial glabel", line)
+                self.fail(".text or .init block without an initial glabel", line)
             self.fn_ins_inds.append((self.num_lines - 1, size // 4))
 
     def process_line(self, line, output_enc):
@@ -497,16 +502,16 @@ class GlobalAsmBlock:
         line = re.sub(r'^[a-zA-Z0-9_]+:\s*', '', line)
         changed_section = False
         emitting_double = False
-        if line.startswith('glabel ') and self.cur_section == '.text':
+        if line.startswith('glabel ') and self.cur_section in ['.text', '.init']:
             self.text_glabels.append(line.split()[1])
         if not line:
             pass # empty line
         elif line.startswith('glabel ') or (' ' not in line and line.endswith(':')):
             pass # label
-        elif line.startswith('.section') or line in ['.text', '.data', '.rdata', '.rodata', '.bss', '.late_rodata']:
+        elif line.startswith('.section') or line in ['.text', '.init', '.data', '.rdata', '.rodata', '.sdata', '.sdata2', '.bss','.sbss', '.late_rodata']:
             # section change
             self.cur_section = '.rodata' if line == '.rdata' else line.split(',')[0].split()[-1]
-            if self.cur_section not in ['.data', '.text', '.rodata', '.late_rodata', '.bss']:
+            if self.cur_section not in ['.data', '.text', '.init', '.rodata', '.sdata', '.sdata2', '.late_rodata', '.bss', '.sbss']:
                 self.fail("unrecognized .section directive", real_line)
             changed_section = True
         elif line.startswith('.late_rodata_alignment'):
@@ -521,6 +526,8 @@ class GlobalAsmBlock:
             changed_section = True
         elif line.startswith('.incbin'):
             self.add_sized(int(line.split(',')[-1].strip(), 0), real_line)
+        elif line.startswith('.skip'):
+            self.add_sized(int(line.split()[-1].strip(), 0), real_line)
         elif line.startswith('.long') or line.startswith('.float'):
             self.align4()
             self.add_sized(4 * len(line.split(',')), real_line)
@@ -565,8 +572,8 @@ class GlobalAsmBlock:
             # cases), or change how this program is invoked.
             # Similarly, we can't currently deal with pseudo-instructions
             # that expand to several real instructions.
-            if self.cur_section != '.text':
-                self.fail("instruction or macro call in non-.text section? not supported", real_line)
+            if self.cur_section != '.text' and self.cur_section != '.init':
+                self.fail("instruction or macro call in non-.text/.init section? not supported", real_line)
             self.add_sized(4, real_line)
         if self.cur_section == '.late_rodata':
             if not changed_section:
@@ -672,20 +679,95 @@ class GlobalAsmBlock:
                     "block to double the allowed ratio."
                         .format(size, available))
 
+        init_name = None
+        if self.fn_section_sizes['.init'] > 0 or late_rodata_fn_output:
+            init_name = state.make_name('func')
+            src[0] = 'int {}(void) {{ return '.format(init_name)
+            src[self.num_lines] = '((volatile void *) 0); }; '
+            instr_count = self.fn_section_sizes['.init'] // 4
+            if instr_count < state.min_instr_count:
+                self.fail("too short .init block")
+            tot_emitted = 0
+            tot_skipped = 0
+            fn_emitted = 0
+            fn_skipped = 0
+            rodata_stack = late_rodata_fn_output[::-1]
+            for (line, count) in self.fn_ins_inds:
+                for _ in range(count):
+                    if (fn_emitted > MAX_FN_SIZE and instr_count - tot_emitted > state.min_instr_count and
+                            (not rodata_stack or rodata_stack[-1])):
+                        # Don't let functions become too large. When a function reaches 284
+                        # instructions, and -O2 -framepointer flags are passed, the IRIX
+                        # compiler decides it is a great idea to start optimizing more.
+                        fn_emitted = 0
+                        fn_skipped = 0
+                        src[line] += '((volatile void *) 0); }} int {}(void) {{ return '.format(state.make_name('large_func'))
+                    if fn_skipped < state.skip_instr_count:
+                        fn_skipped += 1
+                        tot_skipped += 1
+                    elif rodata_stack:
+                        src[line] += rodata_stack.pop()
+                    else:
+                        src[line] += '*(int *)'
+                    tot_emitted += 1
+                    fn_emitted += 1
+            if rodata_stack:
+                size = len(late_rodata_fn_output) // 3
+                available = instr_count - tot_skipped
+                self.fail(
+                    "late rodata to init ratio is too high: {} / {} must be <= 1/3\n"
+                    "add .late_rodata_alignment (4|8) to the .late_rodata "
+                    "block to double the allowed ratio."
+                        .format(size, available))
+
         rodata_name = None
         if self.fn_section_sizes['.rodata'] > 0:
             rodata_name = state.make_name('rodata')
-            src[self.num_lines] += ' const char {}[{}] = {{1}};'.format(rodata_name, self.fn_section_sizes['.rodata'])
+            src[self.num_lines] += f" const char {rodata_name}[{self.fn_section_sizes['.rodata']}] = {{1}};"
 
         data_name = None
         if self.fn_section_sizes['.data'] > 0:
             data_name = state.make_name('data')
-            src[self.num_lines] += ' char {}[{}] = {{1}};'.format(data_name, self.fn_section_sizes['.data'])
+            src[self.num_lines] += f" char {data_name}[{self.fn_section_sizes['.data']}] = {{1}};"
 
         bss_name = None
         if self.fn_section_sizes['.bss'] > 0:
             bss_name = state.make_name('bss')
-            src[self.num_lines] += ' char {}[{}];'.format(bss_name, self.fn_section_sizes['.bss'])
+            src[self.num_lines] += f" char {bss_name}[{self.fn_section_sizes['.bss']}];"
+
+        sdata_name = None # sdata is like data but small
+        if self.fn_section_sizes['.sdata'] > 0:
+            sdata_code = ""
+            for i in range(self.fn_section_sizes['.sdata']):
+                sdata_name = state.make_name('sdata')
+                sdata_code += f" char {sdata_name} = 1;"
+            src[self.num_lines] += sdata_code
+
+        sdata2_name = None # sdata2 is like rodata but small
+        if self.fn_section_sizes['.sdata2'] > 0:
+            sdata2_code = ""
+            for i in range(self.fn_section_sizes['.sdata2']):
+                sdata2_name = state.make_name('sdata2')
+                sdata2_code += f" const char {sdata2_name} = 1;"
+            src[self.num_lines] += sdata2_code
+
+        sbss_name = None # Similarly, sbss is like uninitialized data but small
+        if self.fn_section_sizes['.sbss'] > 0:
+            sbss_code = ""
+            for i in range(self.fn_section_sizes['.sbss']):
+                sbss_name = state.make_name('sbss')
+                sbss_code += f" char {sbss_name};"
+            src[self.num_lines] += sbss_code
+
+        """ sbss2 is currently borked
+        sbss2_name = None # Similarly, sbss2 is like uninitialized rodata but small
+        if self.fn_section_sizes['.sbss2'] > 0:
+            sbss2_code = ""
+            for i in range(self.fn_section_sizes['.sbss2']):
+                sbss2_name = state.make_name('sbss2')
+                sbss2_code += f" const char {sbss2_name};"
+            src[self.num_lines] += sbss2_code
+        """
 
         fn = Function(
                 text_glabels=self.text_glabels,
@@ -699,6 +781,10 @@ class GlobalAsmBlock:
                     '.data': (data_name, self.fn_section_sizes['.data']),
                     '.rodata': (rodata_name, self.fn_section_sizes['.rodata']),
                     '.bss': (bss_name, self.fn_section_sizes['.bss']),
+                    '.sdata': (sdata_name, self.fn_section_sizes['.sdata']),
+                    '.sdata2': (sdata2_name, self.fn_section_sizes['.sdata2']),
+                    '.sbss': (sbss_name, self.fn_section_sizes['.sbss']),
+                    #'.sbss2': (sbss2_name, self.fn_section_sizes['.sbss2']),
                 })
         return src, fn
 
@@ -794,7 +880,7 @@ def parse_source(f, opt, framepointer, input_enc, output_enc, print_source=None)
     return asm_functions
 
 def fixup_objfile(objfile_name, functions, asm_prelude, assembler, output_enc):
-    SECTIONS = ['.data', '.text', '.rodata', '.bss']
+    SECTIONS = ['.data', '.text', '.rodata', '.bss', '.sdata', '.sdata2', '.sbss']
 
     with open(objfile_name, 'rb') as f:
         objfile = ElfFile(f.read())
@@ -804,12 +890,20 @@ def fixup_objfile(objfile_name, functions, asm_prelude, assembler, output_enc):
         '.data': 0,
         '.rodata': 0,
         '.bss': 0,
+        '.sdata': 0,
+        '.sdata2': 0,
+        '.sbss': 0,
+        #'.sbss2': 0,
     }
     to_copy = {
         '.text': [],
         '.data': [],
         '.rodata': [],
         '.bss': [],
+        '.sdata': [],
+        '.sdata2': [],
+        '.sbss': [],
+        #'.sbss2': [],
     }
     asm = []
     all_late_rodata_dummy_bytes = []
@@ -914,7 +1008,7 @@ def fixup_objfile(objfile_name, functions, asm_prelude, assembler, output_enc):
                 assert loc1 == pos, "assembly and C files don't line up for section " + sectype + ", " + fn_desc
                 if loc2 - loc1 != count:
                     raise Failure("incorrectly computed size for section " + sectype + ", " + fn_desc + ". If using .double, make sure to provide explicit alignment padding.")
-            if sectype == '.bss':
+            if sectype == '.bss' or sectype == '.sbss2':
                 continue
             target = objfile.find_section(sectype)
             assert target is not None, "missing target section of type " + sectype
@@ -1003,7 +1097,9 @@ def fixup_objfile(objfile_name, functions, asm_prelude, assembler, output_enc):
             if s.st_shndx not in [SHN_UNDEF, SHN_ABS]:
                 section_name = asm_objfile.sections[s.st_shndx].name
                 if section_name not in SECTIONS:
-                    raise Failure("generated assembly .o must only have symbols for .text, .data, .rodata, ABS and UNDEF, but found " + section_name)
+                    raise Failure("generated assembly .o must only have symbols for .text, .data, .rodata, .sdata, .sdata2, .sbss, ABS and UNDEF, but found " + section_name)
+                if section_name == '.sbss2': #! I'm not sure why this isn't working
+                    continue
                 s.st_shndx = objfile.find_section(section_name).index
                 # glabel's aren't marked as functions, making objdump output confusing. Fix that.
                 if s.name in all_text_glabels:
@@ -1032,7 +1128,7 @@ def fixup_objfile(objfile_name, functions, asm_prelude, assembler, output_enc):
                     nrels = []
                     for rel in reltab.relocations:
                         if (sectype == '.text' and rel.r_offset in modified_text_positions or
-                            sectype == '.rodata' and rel.r_offset in jtbl_rodata_positions):
+                            sectype == '.rodata' and rel.r_offset in jtbl_rodata_positions) or sectype == ".sbss2":
                             # don't include relocations for late_rodata dummy code
                             continue
                         # hopefully we don't have relocations for local or
@@ -1071,9 +1167,10 @@ def fixup_objfile(objfile_name, functions, asm_prelude, assembler, output_enc):
         objfile.write(objfile_name)
     finally:
         s_file.close()
-        os.remove(s_name)
+        #os.remove(s_name)
         try:
-            os.remove(o_name)
+            pass
+            #os.remove(o_name)
         except:
             pass
 
