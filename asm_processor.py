@@ -642,8 +642,8 @@ class GlobalAsmBlock:
         if self.fn_section_sizes['.text'] > 0 or late_rodata_fn_output:
             text_name = state.make_name('func')
             src[0] = 'int {}(void) {{ return '.format(text_name)
-            src[self.num_lines] = '((volatile void *) 0); }; '
             instr_count = self.fn_section_sizes['.text'] // 4
+            src[self.num_lines] = '((volatile void *) 0); }; ' if instr_count > 1 else '; }; '
             if instr_count < state.min_instr_count:
                 self.fail("too short .text block")
             tot_emitted = 0
@@ -683,8 +683,8 @@ class GlobalAsmBlock:
         if self.fn_section_sizes['.init'] > 0 or late_rodata_fn_output:
             init_name = state.make_name('func')
             src[0] = 'int {}(void) {{ return '.format(init_name)
-            src[self.num_lines] = '((volatile void *) 0); }; '
             instr_count = self.fn_section_sizes['.init'] // 4
+            src[self.num_lines] = '((volatile void *) 0); }; ' if instr_count else '; }; '
             if instr_count < state.min_instr_count:
                 self.fail("too short .init block")
             tot_emitted = 0
@@ -796,7 +796,7 @@ def repl_float_hex(m):
 
 def parse_source(f, opt, framepointer, input_enc, output_enc, print_source=None):
     opt = "O4"
-    min_instr_count = 2 # idk
+    min_instr_count = 1 # idk
     skip_instr_count = 1 # idk
 
     use_jtbl_for_rodata = False
@@ -948,7 +948,7 @@ def fixup_objfile(objfile_name, functions, asm_prelude, assembler, output_enc):
                 if temp_name is not None:
                     asm.append('.section ' + sectype)
                     asm.append('glabel ' + temp_name + '_asm_start')
-            asm.append('.text')
+            asm.append('.section .text')
             for line in function.asm_conts:
                 asm.append(line)
             for sectype, (temp_name, size) in function.data.items():
